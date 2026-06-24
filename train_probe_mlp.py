@@ -15,12 +15,12 @@ from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 
 from architectures import MaskedMuellerJEPA
 from colopola_dataset import ColoPolaDataset
-from physics_features import CloudeMLPLatentEncoder
+from physics_features import CloudeTransformerEncoder
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_ROOT = Path(r"C:\Users\ayoub\Desktop\Stage\Project\data\GIGADATASET_COLAB_NPZ")
-DEFAULT_JEPA_CKPT = PROJECT_ROOT / "results" / "phys_jepa_cloude_mlp_150" / "phys_jepa_cloude_mlp" / "latest.pth.tar"
+DEFAULT_JEPA_CKPT = PROJECT_ROOT / "results" / "phys_jepa_cloude_transformer" / "phys_jepa_cloude_transformer" / "latest.pth.tar"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "results" / "phys_jepa_probe_suite"
 
 
@@ -57,14 +57,15 @@ def save_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2), encoding="utf-8")
 
 
-def build_encoder(sample: torch.Tensor) -> CloudeMLPLatentEncoder:
+def build_encoder(sample: torch.Tensor) -> CloudeTransformerEncoder:
     image_size = int(max(sample.shape[1], sample.shape[2]))
-    return CloudeMLPLatentEncoder(
+    return CloudeTransformerEncoder(
         patch_size=1,
-        embed_dim=32,
-        hidden_dim=64,
-        depth=1,
-        dropout=0.0,
+        embed_dim=64,
+        mlp_hidden_dim=128,
+        num_heads=4,
+        depth=2,
+        dropout=0.1,
         image_size=image_size,
     )
 
@@ -288,21 +289,22 @@ def main() -> None:
     sample, _ = base_train[0]
     image_size = int(max(sample.shape[1], sample.shape[2]))
     jepa = MaskedMuellerJEPA(
-        encoder=CloudeMLPLatentEncoder(
+        encoder=CloudeTransformerEncoder(
             patch_size=1,
-            embed_dim=32,
-            hidden_dim=64,
-            depth=1,
-            dropout=0.0,
+            embed_dim=64,
+            mlp_hidden_dim=128,
+            num_heads=4,
+            depth=2,
+            dropout=0.1,
             image_size=image_size,
         ),
-        predictor_depth=1,
-        dropout=0.0,
+        predictor_depth=2,
+        dropout=0.1,
         mask_ratio=0.5,
         ema_momentum=0.99,
         loss="smooth_l1",
-        predictor_token_dim=8,
-        predictor_hidden_dim=64,
+        predictor_token_dim=16,
+        predictor_hidden_dim=128,
     ).to(device)
     state = torch.load(args.jepa_ckpt, map_location=device)
     jepa.load_state_dict(state["model"])

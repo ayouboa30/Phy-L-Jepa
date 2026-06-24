@@ -71,7 +71,7 @@ def build_encoder(sample: torch.Tensor) -> CloudeTransformerEncoder:
 
 
 @torch.no_grad()
-def encode_dataset(encoder: CloudeMLPLatentEncoder, loader: DataLoader, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+def encode_dataset(encoder: nn.Module, loader: DataLoader, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     feats = []
     labels = []
     encoder.eval()
@@ -214,6 +214,11 @@ def train_probe(
             best_epoch = epoch
             best_val_metrics = copy.deepcopy(val_metrics)
             best_state = copy.deepcopy(head.state_dict())
+            torch.save({
+                "epoch": epoch,
+                "head": best_state,
+                "best_val_f1": best_val_f1,
+            }, output_dir / "best.pth.tar")
             stalled = 0
         else:
             stalled += 1
@@ -288,27 +293,25 @@ def main() -> None:
 
     sample, _ = base_train[0]
     image_size = int(max(sample.shape[1], sample.shape[2]))
-    jepa = MaskedMuellerJEPA(
-        encoder=CloudeTransformerEncoder(
-            patch_size=1,
-            embed_dim=64,
-            mlp_hidden_dim=128,
-            num_heads=4,
-            depth=2,
-            dropout=0.1,
-            image_size=image_size,
-        ),
-        predictor_depth=2,
+    encoder = CloudeTransformerEncoder(
+        patch_size=1,
+        embed_dim=64,
+        mlp_hidden_dim=128,
+        num_heads=4,
+        depth=2,
         dropout=0.1,
-        mask_ratio=0.5,
-        ema_momentum=0.99,
-        loss="smooth_l1",
-        predictor_token_dim=16,
-        predictor_hidden_dim=128,
+        image_size=image_size,
     ).to(device)
     state = torch.load(args.jepa_ckpt, map_location=device)
-    jepa.load_state_dict(state["model"])
-    encoder = jepa.context_encoder
+    model_state = state.get("model", state)
+    encoder_state = {
+        k.removeprefix("context_encoder."): v
+        for k, v in model_state.items()
+        if k.startswith("context_encoder.")
+    }
+    missing, unexpected = encoder.load_state_dict(encoder_state, strict=False)
+    if missing or unexpected:
+        raise RuntimeError(f"Unexpected checkpoint mismatch: missing={missing}, unexpected={unexpected}")
     encoder.eval()
     encoder.requires_grad_(False)
 
@@ -324,6 +327,7 @@ def main() -> None:
     test_features, test_labels = encode_dataset(encoder, test_loader, device)
 
     mean, std = fit_standardizer(train_features)
+    torch.save({"mean": mean, "std": std}, suite_dir / "standardizer.pt")
     train_features = standardize(train_features, mean, std)
     val_features = standardize(val_features, mean, std)
     test_features = standardize(test_features, mean, std)
@@ -368,6 +372,7 @@ def main() -> None:
     final = {
         "elapsed_sec": time.perf_counter() - t0,
         "jepa_ckpt": str(args.jepa_ckpt),
+        "standardizer": str(suite_dir / "standardizer.pt"),
         "results": results,
     }
     save_json(suite_dir / "metrics.json", final)

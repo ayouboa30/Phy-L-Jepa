@@ -1,0 +1,36 @@
+seed: 42
+data:
+  data_root: "data/GIGADATASET_COLAB_NPZ"
+  batch_size: 32
+  num_workers: 0
+  n_channels: 16
+  window_sec: 10.0
+  sfreq: 200
+  aug_noise_std: 0.0
+  aug_scale_jitter: 0.0
+  aug_chan_drop_p: 0.0
+  aug_time_mask_frac: 0.0
+model:
+  n_channels: 16
+  n_time_patches: 1
+  patch_size: 1
+  image_size: 5
+  embed_dim: 128
+  depth: 2
+  dropout: 0.1
+  predictor_depth: 2
+  ema_momentum: 0.996
+  loss: "smooth_l1"
+  retention_weight: 1.0
+  encoder_retention_weight: 1.0
+  variance_weight: 1.0
+  covariance_weight: 0.01
+masking:
+  ratio: 0.5
+optim:
+  epochs: 50
+  lr: 0.001
+  weight_decay: 0.05
+output:
+  results_dir: "results/mueller_hybrid"
+  checkpoint: "results/mueller_hybrid/latest.pth.tar"

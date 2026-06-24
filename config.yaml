@@ -1,0 +1,33 @@
+﻿meta:
+  seed: 42
+data:
+  data_root: "data/GIGADATASET_COLAB_NPZ"
+  batch_size: 256
+  num_workers: 0
+  max_samples: 4096
+model:
+  name: "phys_jepa_cloude_mlp"
+  physical_features: "cloude_coherency_real_imag"
+  latent_projection: "mlp"
+  n_channels: 16
+  patch_size: 1
+  image_size: 5
+  feature_dim: 32
+  embed_dim: 32
+  hidden_dim: 64
+  depth: 1
+  dropout: 0.0
+  predictor_depth: 1
+  predictor_token_dim: 8
+  predictor_hidden_dim: 64
+  ema_momentum: 0.99
+  loss: "smooth_l1"
+masking:
+  ratio: 0.5
+optim:
+  epochs: 150
+  lr: 0.001
+  weight_decay: 0.01
+output:
+  results_dir: "results/phys_jepa_cloude_mlp"
+  checkpoint: "results/phys_jepa_cloude_mlp/phys_jepa_cloude_mlp/latest.pth.tar"

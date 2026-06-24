@@ -1,0 +1,30 @@
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Local environments
+.venv/
+venv/
+env/
+
+# Notebook noise
+.ipynb_checkpoints/
+
+# Training outputs
+results/
+benchmark_results/
+checkpoints/
+*.log
+*.err
+*.out
+
+# Large checkpoints and weights
+*.pt
+*.pth
+*.pth.tar
+*.ckpt
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+desktop.ini

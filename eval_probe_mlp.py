@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from colopola_dataset import ColoPolaDataset
 from physics_features import CloudeTransformerEncoder
-from train_probe_mlp import ProbeHead, build_base_dataset, encode_dataset, standardize
+from train_probe_mlp import ProbeHead, build_base_dataset, encode_dataset, fit_standardizer, standardize
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -85,6 +85,8 @@ def load_encoder(ckpt_path: Path, image_size: int, device: torch.device) -> nn.M
 
 def evaluate_kind(kind: str, suite_dir: Path, test_features: torch.Tensor, test_labels: torch.Tensor) -> dict:
     probe_path = suite_dir / kind / "best.pth.tar"
+    if not probe_path.exists():
+        probe_path = suite_dir / kind / "latest.pth.tar"
     payload = torch.load(probe_path, map_location="cpu")
     head = ProbeHead(test_features.shape[1], kind=kind, hidden_dim=32, dropout=0.2)
     head.load_state_dict(payload["head"])
@@ -110,9 +112,20 @@ def main() -> None:
     image_size = int(max(sample.shape[1], sample.shape[2]))
     encoder = load_encoder(args.jepa_ckpt, image_size=image_size, device=device)
 
-    standardizer = torch.load(args.suite_dir / "standardizer.pt", map_location="cpu")
-    mean = standardizer["mean"]
-    std = standardizer["std"]
+    standardizer_path = args.suite_dir / "standardizer.pt"
+    if standardizer_path.exists():
+        standardizer = torch.load(standardizer_path, map_location="cpu")
+        mean = standardizer["mean"]
+        std = standardizer["std"]
+    else:
+        train_ds = build_base_dataset(args.data_root, "train", None, smoke_test=False)
+        train_loader = DataLoader(train_ds, batch_size=256, shuffle=False, num_workers=0, drop_last=False)
+        train_sample, _ = train_ds[0]
+        train_image_size = int(max(train_sample.shape[1], train_sample.shape[2]))
+        train_encoder = load_encoder(args.jepa_ckpt, image_size=train_image_size, device=device)
+        train_features, _ = encode_dataset(train_encoder, train_loader, device)
+        mean, std = fit_standardizer(train_features)
+        torch.save({"mean": mean, "std": std}, standardizer_path)
 
     test_features, test_labels = encode_dataset(encoder, test_loader, device)
     test_features = standardize(test_features, mean, std)

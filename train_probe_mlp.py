@@ -167,6 +167,15 @@ def fit_standardizer(train_features: torch.Tensor) -> tuple[torch.Tensor, torch.
 def standardize(features: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
     return (features - mean) / std
 
+def infer_probe_head_hidden_dim(state_dict: dict[str, torch.Tensor], kind: str) -> int:
+    kind = kind.lower()
+    if kind == "linear":
+        return 0
+    weight = state_dict.get("net.1.weight")
+    if weight is None:
+        raise RuntimeError("Cannot infer MLP hidden_dim from checkpoint: missing net.1.weight")
+    return int(weight.shape[0])
+
 
 def train_probe(
     *,
@@ -227,6 +236,7 @@ def train_probe(
             torch.save({
                 "epoch": epoch,
                 "head": best_state,
+                "head_config": {"kind": kind, "hidden_dim": hidden_dim, "dropout": dropout},
                 "best_val_f1": best_val_f1,
             }, output_dir / "best.pth.tar")
             stalled = 0
@@ -243,6 +253,7 @@ def train_probe(
         torch.save({
             "epoch": epoch,
             "head": head.state_dict(),
+            "head_config": {"kind": kind, "hidden_dim": hidden_dim, "dropout": dropout},
             "optimizer": optimizer.state_dict(),
             "best_epoch": best_epoch,
             "best_val_f1": best_val_f1,

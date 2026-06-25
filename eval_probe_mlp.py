@@ -23,6 +23,19 @@ def save_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2), encoding="utf-8")
 
+def infer_probe_head_hidden_dim(payload: dict, kind: str) -> int:
+    kind = kind.lower()
+    config = payload.get("head_config") or {}
+    if kind == "linear":
+        return 0
+    if isinstance(config, dict) and "hidden_dim" in config:
+        return int(config["hidden_dim"])
+    head_state = payload["head"]
+    weight = head_state.get("net.1.weight")
+    if weight is None:
+        raise RuntimeError("Cannot infer MLP hidden_dim from checkpoint: missing net.1.weight and head_config")
+    return int(weight.shape[0])
+
 
 @torch.no_grad()
 def compute_metrics(head: nn.Module, features: torch.Tensor, labels: torch.Tensor) -> dict:
@@ -80,7 +93,8 @@ def evaluate_kind(kind: str, suite_dir: Path, test_features: torch.Tensor, test_
     if not probe_path.exists():
         probe_path = suite_dir / kind / "latest.pth.tar"
     payload = torch.load(probe_path, map_location="cpu", weights_only=False)
-    head = ProbeHead(test_features.shape[1], kind=kind, hidden_dim=32, dropout=0.2)
+    hidden_dim = infer_probe_head_hidden_dim(payload, kind)
+    head = ProbeHead(test_features.shape[1], kind=kind, hidden_dim=hidden_dim if hidden_dim > 0 else 32, dropout=0.2)
     head.load_state_dict(payload["head"])
     metrics = compute_metrics(head, test_features, test_labels)
     out = {"kind": kind, "checkpoint": str(probe_path), "metrics": metrics}

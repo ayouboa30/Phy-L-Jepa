@@ -69,6 +69,69 @@ class MuellerPatchEncoder(nn.Module):
         return self.forward(x).mean(dim=1)
 
 
+class ImageMuellerTransformerEncoder(nn.Module):
+    """Image-scale transformer encoder over raw 16-channel Mueller patches."""
+
+    def __init__(
+        self,
+        in_channels: int = 16,
+        patch_size: int = 1,
+        embed_dim: int = 128,
+        depth: int = 4,
+        num_heads: int = 8,
+        mlp_hidden_dim: int = 256,
+        dropout: float = 0.1,
+        image_size: int = 5,
+    ) -> None:
+        super().__init__()
+        self.in_channels = int(in_channels)
+        self.patch_size = int(patch_size)
+        self.embed_dim = int(embed_dim)
+        self.image_size = int(image_size)
+        self.n_patches_h = max(1, self.image_size // self.patch_size)
+        self.n_patches_w = max(1, self.image_size // self.patch_size)
+        self.num_patches = self.n_patches_h * self.n_patches_w
+
+        self.patch_embed = nn.Sequential(
+            nn.Conv2d(self.in_channels, self.embed_dim, kernel_size=self.patch_size, stride=self.patch_size),
+            nn.GELU(),
+            nn.Conv2d(self.embed_dim, self.embed_dim, kernel_size=1),
+        )
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.embed_dim,
+            nhead=num_heads,
+            dim_feedforward=mlp_hidden_dim,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        self.final_norm = nn.LayerNorm(self.embed_dim)
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, self.embed_dim))
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+
+    def forward(
+        self, x: torch.Tensor, visible_indices: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        if x.ndim != 4 or x.shape[1] != self.in_channels:
+            raise ValueError(f"Expected [B,{self.in_channels},H,W], got {tuple(x.shape)}")
+
+        tokens = self.patch_embed(x).flatten(2).transpose(1, 2)
+        tokens = tokens + self.pos_embed[:, : tokens.shape[1], :]
+        tokens = self.final_norm(self.transformer(tokens))
+        if visible_indices is not None:
+            tokens = torch.gather(
+                tokens,
+                1,
+                visible_indices.unsqueeze(-1).expand(-1, -1, self.embed_dim),
+            )
+        return tokens
+
+    def represent(self, x: torch.Tensor) -> torch.Tensor:
+        return self.forward(x).mean(dim=1)
+
+
 
 
 class MuellerMatrixEncoder(nn.Module):

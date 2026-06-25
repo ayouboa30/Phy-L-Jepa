@@ -6,11 +6,11 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+
 from torch.utils.data import DataLoader, TensorDataset
 
 from colopola_dataset import ColoPolaDataset
-from physics_features import CloudeTransformerEncoder
-from train_probe_mlp import ProbeHead, build_base_dataset, encode_dataset, fit_standardizer, standardize
+from train_probe_mlp import ProbeHead, build_base_dataset, build_encoder, encode_dataset, fit_standardizer, standardize
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -58,17 +58,9 @@ def compute_metrics(head: nn.Module, features: torch.Tensor, labels: torch.Tenso
     }
 
 
-def load_encoder(ckpt_path: Path, image_size: int, device: torch.device) -> nn.Module:
-    encoder = CloudeTransformerEncoder(
-        patch_size=1,
-        embed_dim=64,
-        mlp_hidden_dim=128,
-        num_heads=4,
-        depth=2,
-        dropout=0.1,
-        image_size=image_size,
-    ).to(device)
-    state = torch.load(ckpt_path, map_location=device)
+def load_encoder(ckpt_path: Path, sample: torch.Tensor, encoder_type: str, device: torch.device) -> nn.Module:
+    encoder = build_encoder(sample, encoder_type).to(device)
+    state = torch.load(ckpt_path, map_location=device, weights_only=False)
     model_state = state.get("model", state)
     encoder_state = {
         k.removeprefix("context_encoder."): v
@@ -87,7 +79,7 @@ def evaluate_kind(kind: str, suite_dir: Path, test_features: torch.Tensor, test_
     probe_path = suite_dir / kind / "best.pth.tar"
     if not probe_path.exists():
         probe_path = suite_dir / kind / "latest.pth.tar"
-    payload = torch.load(probe_path, map_location="cpu")
+    payload = torch.load(probe_path, map_location="cpu", weights_only=False)
     head = ProbeHead(test_features.shape[1], kind=kind, hidden_dim=32, dropout=0.2)
     head.load_state_dict(payload["head"])
     metrics = compute_metrics(head, test_features, test_labels)
@@ -100,29 +92,28 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     parser.add_argument("--jepa-ckpt", type=Path, default=DEFAULT_JEPA_CKPT)
+    parser.add_argument("--encoder-type", choices=("cloude", "image"), default="cloude")
     parser.add_argument("--suite-dir", type=Path, default=DEFAULT_SUITE_DIR)
     parser.add_argument("--kind", choices=("linear", "mlp", "both"), default="both")
     args = parser.parse_args()
 
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     test_ds = build_base_dataset(args.data_root, "test", None, smoke_test=False)
     test_loader = DataLoader(test_ds, batch_size=256, shuffle=False, num_workers=0, drop_last=False)
 
     sample, _ = test_ds[0]
-    image_size = int(max(sample.shape[1], sample.shape[2]))
-    encoder = load_encoder(args.jepa_ckpt, image_size=image_size, device=device)
+    encoder = load_encoder(args.jepa_ckpt, sample=sample, encoder_type=args.encoder_type, device=device)
 
     standardizer_path = args.suite_dir / "standardizer.pt"
     if standardizer_path.exists():
-        standardizer = torch.load(standardizer_path, map_location="cpu")
+        standardizer = torch.load(standardizer_path, map_location="cpu", weights_only=False)
         mean = standardizer["mean"]
         std = standardizer["std"]
     else:
         train_ds = build_base_dataset(args.data_root, "train", None, smoke_test=False)
         train_loader = DataLoader(train_ds, batch_size=256, shuffle=False, num_workers=0, drop_last=False)
         train_sample, _ = train_ds[0]
-        train_image_size = int(max(train_sample.shape[1], train_sample.shape[2]))
-        train_encoder = load_encoder(args.jepa_ckpt, image_size=train_image_size, device=device)
+        train_encoder = load_encoder(args.jepa_ckpt, sample=train_sample, encoder_type=args.encoder_type, device=device)
         train_features, _ = encode_dataset(train_encoder, train_loader, device)
         mean, std = fit_standardizer(train_features)
         torch.save({"mean": mean, "std": std}, standardizer_path)
@@ -132,7 +123,7 @@ def main() -> None:
 
     kinds = ["linear", "mlp"] if args.kind == "both" else [args.kind]
     results = [evaluate_kind(kind, args.suite_dir, test_features, test_labels) for kind in kinds]
-    save_json(args.suite_dir / "test_only_summary.json", {"jepa_ckpt": str(args.jepa_ckpt), "results": results})
+    save_json(args.suite_dir / "test_only_summary.json", {"jepa_ckpt": str(args.jepa_ckpt), "encoder_type": args.encoder_type, "results": results})
     print(json.dumps(results, indent=2))
 
 

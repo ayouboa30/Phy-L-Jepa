@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 
-from architectures import MaskedMuellerJEPA
+from architectures import ImageMuellerTransformerEncoder
 from colopola_dataset import ColoPolaDataset
 from physics_features import CloudeTransformerEncoder
 
@@ -57,8 +57,18 @@ def save_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2), encoding="utf-8")
 
 
-def build_encoder(sample: torch.Tensor) -> CloudeTransformerEncoder:
+def build_encoder(sample: torch.Tensor, encoder_type: str) -> nn.Module:
     image_size = int(max(sample.shape[1], sample.shape[2]))
+    if encoder_type == "image":
+        return ImageMuellerTransformerEncoder(
+            patch_size=1,
+            embed_dim=128,
+            depth=4,
+            num_heads=8,
+            mlp_hidden_dim=256,
+            dropout=0.1,
+            image_size=image_size,
+        )
     return CloudeTransformerEncoder(
         patch_size=1,
         embed_dim=64,
@@ -263,6 +273,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
     parser.add_argument("--jepa-ckpt", type=Path, default=DEFAULT_JEPA_CKPT)
+    parser.add_argument("--encoder-type", choices=("cloude", "image"), default="cloude")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -278,7 +289,7 @@ def main() -> None:
 
     set_seed(42)
     torch.set_num_threads(max(1, min(8, torch.get_num_threads())))
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     base_train = build_base_dataset(args.data_root, "train", args.max_train_samples, args.smoke_test)
     test_ds = build_base_dataset(args.data_root, "test", None, args.smoke_test)
@@ -292,17 +303,8 @@ def main() -> None:
     test_loader = build_loader(test_ds, args.batch_size, shuffle=False)
 
     sample, _ = base_train[0]
-    image_size = int(max(sample.shape[1], sample.shape[2]))
-    encoder = CloudeTransformerEncoder(
-        patch_size=1,
-        embed_dim=64,
-        mlp_hidden_dim=128,
-        num_heads=4,
-        depth=2,
-        dropout=0.1,
-        image_size=image_size,
-    ).to(device)
-    state = torch.load(args.jepa_ckpt, map_location=device)
+    encoder = build_encoder(sample, args.encoder_type).to(device)
+    state = torch.load(args.jepa_ckpt, map_location=device, weights_only=False)
     model_state = state.get("model", state)
     encoder_state = {
         k.removeprefix("context_encoder."): v
@@ -326,14 +328,14 @@ def main() -> None:
     val_features, val_labels = encode_dataset(encoder, val_loader, device)
     test_features, test_labels = encode_dataset(encoder, test_loader, device)
 
+    suite_dir = args.output_dir
+    suite_dir.mkdir(parents=True, exist_ok=True)
     mean, std = fit_standardizer(train_features)
     torch.save({"mean": mean, "std": std}, suite_dir / "standardizer.pt")
     train_features = standardize(train_features, mean, std)
     val_features = standardize(val_features, mean, std)
     test_features = standardize(test_features, mean, std)
 
-    suite_dir = args.output_dir
-    suite_dir.mkdir(parents=True, exist_ok=True)
     save_json(suite_dir / "split_stats.json", {
         "train_samples": int(train_labels.numel()),
         "val_samples": int(val_labels.numel()),
@@ -372,6 +374,7 @@ def main() -> None:
     final = {
         "elapsed_sec": time.perf_counter() - t0,
         "jepa_ckpt": str(args.jepa_ckpt),
+        "encoder_type": args.encoder_type,
         "standardizer": str(suite_dir / "standardizer.pt"),
         "results": results,
     }

@@ -26,11 +26,95 @@ The goal is to keep the codebase focused on the stage work and on a reproducible
 
 ## Data
 
-The default dataset path used by the new launcher is:
+Training in this repository expects the ColoPola data in NPZ format.
+
+### Official source (Zenodo)
+
+The dataset is available on Zenodo:  
+https://zenodo.org/records/10554304
+
+Current release files are provided in **HDF5 (`.h5`)** format.
+
+### Convert `.h5` to `.npz` (code-compatible format)
+
+This codebase expects train/test NPZ files readable by `colopola_dataset.py`.  
+If your downloaded files are `.h5`, convert them first.
+
+#### 1) Install dependencies
+
+```bash
+py -3.13 -m pip install h5py numpy
+```
+
+#### 2) Example conversion script
+
+Create `tools/convert_h5_to_npz.py`:
+
+```python
+from pathlib import Path
+import argparse
+import numpy as np
+import h5py
+
+def find_first_existing(h5f, candidates):
+    for k in candidates:
+        if k in h5f:
+            return np.array(h5f[k])
+    raise KeyError(f"None of these keys were found: {candidates}")
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", type=str, required=True, help="Path to input .h5 file")
+    parser.add_argument("--output", type=str, required=True, help="Path to output .npz file")
+    parser.add_argument("--x-key", type=str, default="", help="Optional explicit key for features/images")
+    parser.add_argument("--y-key", type=str, default="", help="Optional explicit key for labels")
+    args = parser.parse_args()
+
+    in_path = Path(args.input)
+    out_path = Path(args.output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with h5py.File(in_path, "r") as f:
+        # Common key names used in H5 datasets
+        x_candidates = [args.x_key] if args.x_key else []
+        x_candidates += ["X", "x", "images", "data", "inputs", "mueller", "features"]
+
+        y_candidates = [args.y_key] if args.y_key else []
+        y_candidates += ["y", "Y", "labels", "target", "targets", "classes"]
+
+        X = find_first_existing(f, [k for k in x_candidates if k])
+        y = find_first_existing(f, [k for k in y_candidates if k])
+
+    # Save with standard key names expected by most training loaders
+    np.savez_compressed(out_path, X=X, y=y)
+    print(f"[OK] Saved: {out_path}")
+    print(f"     X shape: {X.shape}, dtype: {X.dtype}")
+    print(f"     y shape: {y.shape}, dtype: {y.dtype}")
+
+if __name__ == "__main__":
+    main()
+```
+
+#### 3) Run conversion
+
+```bash
+py -3.13 tools/convert_h5_to_npz.py --input path/to/train.h5 --output path/to/train.npz
+py -3.13 tools/convert_h5_to_npz.py --input path/to/test.h5  --output path/to/test.npz
+```
+
+If your H5 file uses different dataset names, pass explicit keys:
+
+```bash
+py -3.13 tools/convert_h5_to_npz.py --input path/to/train.h5 --output path/to/train.npz --x-key images --y-key labels
+```
+
+### Expected local path
+
+By default, the launcher uses:
 
 `C:\Users\ayoub\Desktop\Stage\Project\data\GIGADATASET_COLAB_NPZ`
 
-Expected files include the train and test NPZ splits already present in that directory.
+Place your converted NPZ train/test files there (or update your config/path arguments accordingly).
 
 ## Training
 
